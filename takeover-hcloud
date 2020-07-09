@@ -37,7 +37,7 @@ fi;
 
 # dryrun support
 precmd="";
-if [ $DRYRUN = "1" ];
+if [ -n "$DRYRUN" -a "$DRYRUN" = "1" ];
 then
 	precmd="echo";
 fi;
@@ -61,6 +61,9 @@ then
 	exit 1;
 fi;
 
+# SAFE NOW
+set -u;
+
 # verify hcloud connection
 if ! $HCLOUD_BIN datacenter list &>/dev/null;
 then
@@ -73,7 +76,7 @@ for id in $TAKEOVER_FLOATING_IP_ID;
 do
 	if [ $ENDSTATE = "MASTER" ];
 	then
-		$precmd $HCLOUD_BIN floating-ip assign "$id" "$HCLOUD_LOCAL_SERVER_NAME";
+		$precmd $HCLOUD_BIN floating-ip assign "$id" "$TAKEOVER_LOCAL_SERVER_NAME";
 	fi;
 done;
 
@@ -90,14 +93,13 @@ then
 	nets="";
 	for id in $TAKEOVER_SERVERS_ID;
 	do
-		tmp=`mktemp /tmp/$bn.XXXXXXXX`;
+		tmp=`mktemp /tmp/$BN.XXXXXXXX`;
 
 		if ! $HCLOUD_BIN server describe "$id" >"$tmp" 2>/dev/null;
 		then
 			echo "$BN: failed to get data for server #$id" >&2;
 			continue;
 		fi;
-
 
 		for ip in $TAKEOVER_ALIAS_IPS;
 		do
@@ -118,7 +120,7 @@ then
 		if [ "$serverid" != "$TAKEOVER_LOCAL_SERVER_ID" ];
 		then
 			$precmd $HCLOUD_BIN server change-alias-ips --network "$netid" --clear "$serverid";
-			$precmd $HCLOUD_BIN server change-alias-ips --network "$netid" --alias-ips "$ip" "$HCLOUD_LOCAL_SERVER_ID";
+			$precmd $HCLOUD_BIN server change-alias-ips --network "$netid" --alias-ips "$ip" "$TAKEOVER_LOCAL_SERVER_ID";
 		fi;
 	done;
 fi;
