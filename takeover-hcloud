@@ -1,0 +1,124 @@
+#!/bin/bash
+#
+# PROGRAM	: takeover-hcloud
+# PURPOSE	: Hetzner hcloud IP takeover script for keepalived
+# AUTHOR	: Samuel Behan <samuel.behan(at)dob(dot)sk> (c) 2019-2020
+# HOMEPAGE	: https://github.com/promitilus/ip-takeover
+# LICENSE	: GNU GPL v3 or later (see file LICENSE)
+#
+#
+# RECOGNIZED VARS:
+#   HCLOUD_TOKEN			- api token
+#   TAKEOVER_LOCAL_SERVER_NAME		- local server name
+#   TAKEOVER_LOCAL_SERVER_ID		- local server id
+#   TAKEOVER_SERVERS			- all server names (takeover capable)
+#   TAKEOVER_SERVERS_ID			- all server ids (takeover capable)
+#   TAKEOVER_FLOATING_IP		- floating ip address
+#   TAKEOVER_FLOATING_IP_ID		- floating ip id
+#   TAKEOVER_ALIAS_IPS			- list of alias ips for reassign
+#
+#   DRYRUN=1				- no action, just print commands
+#
+##############################################################################
+
+DN=`dirname "$0"`;
+BN=`basename "$0"`;
+HCLOUD_BIN="${HCLOUD_BIN:-hcloud}";
+
+# ARGS
+ENDSTATE="$3";
+NAME="$2";
+TYPE="$1";
+if [ -z "$ENDSTATE" ];
+then
+	echo "usage: $BN <TYPE> <NAME> <ENDSTATE = MASTER | BACKUP | FAULT>" >&2;
+	exit 1;
+fi;
+
+# dryrun support
+precmd="";
+if [ $DRYRUN = "1" ];
+then
+	precmd="echo";
+fi;
+
+# check requirements
+if ! type -p $HCLOUD_BIN &>/dev/null;
+then
+	echo "$BN: required command 'hcloud' is missing !" >&2;
+	exit 1;
+fi;
+
+# check env requirements
+if [ -z "$HCLOUD_TOKEN" ];
+then
+	echo "$BN: require variable HCLOUD_TOKEN not set !" >&2;
+	exit 1;
+fi;
+if [ -z "$TAKEOVER_LOCAL_SERVER_NAME" -o -z "$TAKEOVER_LOCAL_SERVER_ID" ];
+then
+	echo "$BN: require variable TAKEOVER_LOCAL_SERVER_NAME or TAKEOVER_LOCAL_SERVER_ID not set !" >&2;
+	exit 1;
+fi;
+
+# verify hcloud connection
+if ! $HCLOUD_BIN datacenter list &>/dev/null;
+then
+	echo "$BN: hcloud connection failed, check HCLOUD_TOKEN !" >&2;
+	exit 1;
+fi;
+
+# TAKEOVER IP
+for id in $TAKEOVER_FLOATING_IP_ID;
+do
+	if [ $ENDSTATE = "MASTER" ];
+	then
+		$precmd $HCLOUD_BIN floating-ip assign "$id" "$HCLOUD_LOCAL_SERVER_NAME";
+	fi;
+done;
+
+# NO MORE WORK HERE
+if [ $ENDSTATE != "MASTER" ];
+then
+	exit 0;
+fi;
+
+# SWITCH ALIAS IPS
+if [ -n "$TAKEOVER_ALIAS_IPS" ];
+then
+	# P1: discover assignments
+	nets="";
+	for id in $TAKEOVER_SERVERS_ID;
+	do
+		tmp=`mktemp /tmp/$bn.XXXXXXXX`;
+
+		if ! $HCLOUD_BIN server describe "$id" >"$tmp" 2>/dev/null;
+		then
+			echo "$BN: failed to get data for server #$id" >&2;
+			continue;
+		fi;
+
+
+		for ip in $TAKEOVER_ALIAS_IPS;
+		do
+			netid=`grep "$ip" -B 10 "$tmp" | tac | grep 'ID:' -B 10 -m 1 | tac | sed -e 's: - ::g' | awk '/ID:/ { print $2 }'`;
+			if [ -n "$netid" ];
+			then
+				nets="$nets $ip:$netid:$id";
+			fi;
+		done;
+
+		rm -f "$tmp";
+	done;
+
+	# P2: change assignments
+	for net in $nets;
+	do
+		IFS=":" read ip netid serverid <<< "$net";
+		if [ "$serverid" != "$TAKEOVER_LOCAL_SERVER_ID" ];
+		then
+			$precmd $HCLOUD_BIN server change-alias-ips --network "$netid" --clear "$serverid";
+			$precmd $HCLOUD_BIN server change-alias-ips --network "$netid" --alias-ips "$ip" "$HCLOUD_LOCAL_SERVER_ID";
+		fi;
+	done;
+fi;
